@@ -41,7 +41,7 @@ def camera_caliberation(nx = 9, ny = 6):
     imgpoints = []  # 2d points in image plane.
 
     # Make a list of calibration images
-    images = glob.glob('camera_cal/calibration*.jpg')
+    images = glob.glob('../camera_cal/calibration*.jpg')
     # Step through the list and search for chessboard corners
     for fname in images:
         img = cv2.imread(fname)
@@ -64,38 +64,47 @@ def camera_caliberation(nx = 9, ny = 6):
 def cal_undistort(img, mtx, dist):
     return cv2.undistort(img, mtx, dist, None, mtx)
 
-def color_gradient_binary(img, s_thresh=(170, 255), sx_thresh=(20, 100)):
-    # Convert to HLS color space and separate the S channel
-    # Note: img is the undistorted image
-    hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
-    s_channel = hls[:, :, 2]
 
-    # Grayscale image
-    # NOTE: we already saw that standard grayscaling lost color information for the lane lines
-    # Explore gradients in other colors spaces / color channels to see what might work better
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+def color_gradient_binary(img):
+    image = np.copy(img)
+
+    HSV = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+
+    # For yellow
+    yellow = cv2.inRange(HSV, (20, 100, 100), (50, 255, 255))
+
+    # For white
+    sensitivity_1 = 68
+    white = cv2.inRange(HSV, (0, 0, 255 - sensitivity_1), (255, 20, 255))
+
+    sensitivity_2 = 60
+    HLS = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)
+    white_2 = cv2.inRange(HLS, (0, 255 - sensitivity_2, 0), (255, 255, sensitivity_2))
+    white_3 = cv2.inRange(image, (200, 200, 200), (255, 255, 255))
+
+    # HLS for white and yellow
+    HLS = cv2.cvtColor(image, cv2.COLOR_BGR2HLS)
+    yellow2 = cv2.inRange(HLS, (10, 80, 100), (100, 210, 155))
+
+    white4 = cv2.inRange(HLS, (0, 215, 0), (255, 255, 255))
+
+    bit_layer = yellow2 | white4 | yellow | white | white_2 | white_3
+
+    binary = np.zeros_like(image[:, :, 0])
+    binary[bit_layer] = 1
 
     # Sobel x
-    sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0)  # Take the derivative in x
+    l_channel = HLS[:, :, 1]
+    sobelx = cv2.Sobel(l_channel, cv2.CV_64F, 1, 0)  # Take the derivative in x
     abs_sobelx = np.absolute(sobelx)  # Absolute x derivative to accentuate lines away from horizontal
     scaled_sobel = np.uint8(255 * abs_sobelx / np.max(abs_sobelx))
-
     # Threshold x gradient
     sxbinary = np.zeros_like(scaled_sobel)
+    sx_thresh = (20, 100)
     sxbinary[(scaled_sobel >= sx_thresh[0]) & (scaled_sobel <= sx_thresh[1])] = 1
 
-    # Threshold color channel
-    s_binary = np.zeros_like(s_channel)
-    s_binary[(s_channel >= s_thresh[0]) & (s_channel <= s_thresh[1])] = 1
-
-    # Stack each channel to view their individual contributions in green and blue respectively
-    # This returns a stack of the two binary images, whose components you can see as different colors
-    color_binary = np.dstack((np.zeros_like(sxbinary), sxbinary, s_binary))
-
-    # Combine the two binary thresholds
     combined_binary = np.zeros_like(sxbinary)
-    combined_binary[(s_binary == 1) | (sxbinary == 1)] = 1
-
+    combined_binary[(binary == 1) | (sxbinary == 1)] = 1
     return combined_binary
 
 
@@ -125,7 +134,7 @@ def region_of_interest(img, vertices):
 
 def save_result(original, result, name, folder):
     basename = os.path.basename(name)
-    fname = "output_images/" + folder + os.path.splitext(basename)[0] + ".png"
+    fname = "../output_images/" + folder + os.path.splitext(basename)[0] + ".png"
     f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
     f.tight_layout()
 
@@ -139,14 +148,17 @@ def save_result(original, result, name, folder):
     plt.savefig(fname)
 
 def warp_image(img, inverse= False):
-    src = np.float32([[180, 720],
-                      [600, 445],
-                      [680, 445],
-                      [1120, 720]])
-    dst = np.float32([[300, 720],
-                      [300, 0],
-                      [950, 0],
-                      [950, 720]])
+    src = np.float32([[250, 680],
+        [1050, 680],
+        [590, 455],
+        [695, 455]
+    ])
+
+    dst = np.float32([[320, 685],
+        [950, 685],
+        [320, 0],
+        [950, 0]
+    ])
 
     # Given src and dst points, calculate the perspective transform matrix
     if (inverse == False) :
@@ -159,7 +171,7 @@ def warp_image(img, inverse= False):
     return warped
 
 def set_histogram(binary_warped):
-    global line
+    global g_line
 
     bottom_half_y = int(binary_warped.shape[0] / 2)
     # Take a histogram of the bottom half of the image
@@ -168,20 +180,13 @@ def set_histogram(binary_warped):
     # Find the peak of the left and right halves of the histogram
     # These will be the starting point for the left and right liness
     midpoint = np.int(histogram.shape[0] / 2)
-    line.leftx_base = np.argmax(histogram[:midpoint])
-    line.rightx_base = np.argmax(histogram[midpoint:]) + midpoint
+    g_line.leftx_base = np.argmax(histogram[:midpoint])
+    g_line.rightx_base = np.argmax(histogram[midpoint:]) + midpoint
     print ("Histogram peak set")
-    print((line.leftx_base, line.rightx_base))
+    print((g_line.leftx_base, g_line.rightx_base))
 
 def find_lane_lines(binary_warped):
-
-    #Line information
-    global line
-
-
-    if line.leftx_base is None:
-        set_histogram(binary_warped)
-
+    global g_line
     # Choose the number of sliding windows
     nwindows = 9
     # Set height of windows
@@ -191,8 +196,8 @@ def find_lane_lines(binary_warped):
     nonzeroy = np.array(nonzero[0])
     nonzerox = np.array(nonzero[1])
     # Current positions to be updated for each window
-    leftx_current = line.leftx_base
-    rightx_current = line.rightx_base
+    leftx_current = g_line.leftx_base
+    rightx_current = g_line.rightx_base
     # Set the width of the windows +/- margin
     margin = 100
     # Set minimum number of pixels found to recenter window
@@ -237,9 +242,9 @@ def find_lane_lines(binary_warped):
     left_fit = np.polyfit(lefty, leftx, 2)
     right_fit = np.polyfit(righty, rightx, 2)
 
-    line.left_fit = left_fit
-    line.right_fit = right_fit
-    line.detected = True
+    g_line.left_fit = left_fit
+    g_line.right_fit = right_fit
+    g_line.detected = True
 
     ploty = np.linspace(0, binary_warped.shape[0] - 1, binary_warped.shape[0])
     left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
@@ -248,8 +253,6 @@ def find_lane_lines(binary_warped):
     return (left_fitx, right_fitx, ploty)
 
 def find_lane_lines_efficient(binary_warped):
-
-    global line
 
     nonzero = binary_warped.nonzero()
     nonzeroy = np.array(nonzero[0])
@@ -319,10 +322,6 @@ def calculate_radius(binary_warped, left_fitx, right_fitx):
     return (left_curverad, right_curverad   )
 
 def process_image(img):
-
-    # The object which will hold the info
-    global line
-
     line.frameCounter += 1
     undist_img = cal_undistort(img, mtx, dist)
     binary_img = color_gradient_binary(undist_img)
@@ -385,7 +384,7 @@ def process_image(img):
 
 def test_images():
     # Load test_images
-    test_images = glob.glob('test_images/test*.jpg')
+    test_images = glob.glob('../test_images/test*.jpg')
     for fname in test_images:
         img = cv2.imread(fname)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -412,6 +411,7 @@ def test_images():
         warped_img = warp_image(binary_masked_img)
         save_result(img, warped_img, fname, "warped/")
 
+        set_histogram(warped_img)
         left_fitx, right_fitx, ploty = find_lane_lines(warped_img)
 
         left_line = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
@@ -431,13 +431,13 @@ def test_images():
 #Get camera caliberation
 mtx, dist = camera_caliberation()
 
-line = Line()
+g_line = Line()
 #test the pipleline on images
 test_images()
 
 #Test on video
-
+'''
 project_output = 'project_video_output.mp4'
 clip1 = VideoFileClip("project_video.mp4")
 out_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
-out_clip.write_videofile(project_output, audio=False)
+out_clip.write_videofile(project_output, audio=False)'''
