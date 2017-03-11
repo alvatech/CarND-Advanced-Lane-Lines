@@ -11,7 +11,7 @@ class Line():
         # current iteration index w.r.t iteration size
         self.currentIteration = 0
 
-        self.MAX_ITERATION_SIZE = 10
+        self.MAX_ITERATION_SIZE = 4
 
         self.frameCounter = 0
         # was the line detected in the last iteration?
@@ -64,48 +64,25 @@ def camera_caliberation(nx = 9, ny = 6):
 def cal_undistort(img, mtx, dist):
     return cv2.undistort(img, mtx, dist, None, mtx)
 
-
 def color_gradient_binary(img):
     image = np.copy(img)
 
-    HSV = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+    LUV = cv2.cvtColor(image, cv2.COLOR_RGB2LUV)
+    white1 = cv2.inRange(LUV, np.array([225, 0, 0]), np.array([255, 255, 255]))
 
-    # For yellow
-    yellow = cv2.inRange(HSV, (20, 100, 100), (50, 255, 255))
-
-    # For white
-    sensitivity_1 = 68
-    white = cv2.inRange(HSV, (0, 0, 255 - sensitivity_1), (255, 20, 255))
-
-    sensitivity_2 = 60
     HLS = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)
-    white_2 = cv2.inRange(HLS, (0, 255 - sensitivity_2, 0), (255, 255, sensitivity_2))
-    white_3 = cv2.inRange(image, (200, 200, 200), (255, 255, 255))
+    white2 = cv2.inRange(HLS, np.array([0, 215, 0]), np.array([255, 255, 255]))
+    yellow1 = cv2.inRange(HLS, np.array([10, 80, 100]), np.array([100, 210, 155]))
 
-    # HLS for white and yellow
-    HLS = cv2.cvtColor(image, cv2.COLOR_BGR2HLS)
-    yellow2 = cv2.inRange(HLS, (10, 80, 100), (100, 210, 155))
+    LAB = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
+    yellow2 = cv2.inRange(LAB, np.array([0, 0, 155]), np.array([255, 255, 200]))
 
-    white4 = cv2.inRange(HLS, (0, 215, 0), (255, 255, 255))
-
-    bit_layer = yellow2 | white4 | yellow | white | white_2 | white_3
+    bit_layer = yellow1 | white2 | white1 | yellow2
 
     binary = np.zeros_like(image[:, :, 0])
-    binary[bit_layer] = 1
+    binary[bit_layer.astype(bool)] = 1
 
-    # Sobel x
-    l_channel = HLS[:, :, 1]
-    sobelx = cv2.Sobel(l_channel, cv2.CV_64F, 1, 0)  # Take the derivative in x
-    abs_sobelx = np.absolute(sobelx)  # Absolute x derivative to accentuate lines away from horizontal
-    scaled_sobel = np.uint8(255 * abs_sobelx / np.max(abs_sobelx))
-    # Threshold x gradient
-    sxbinary = np.zeros_like(scaled_sobel)
-    sx_thresh = (20, 100)
-    sxbinary[(scaled_sobel >= sx_thresh[0]) & (scaled_sobel <= sx_thresh[1])] = 1
-
-    combined_binary = np.zeros_like(sxbinary)
-    combined_binary[(binary == 1) | (sxbinary == 1)] = 1
-    return combined_binary
+    return binary
 
 
 def region_of_interest(img, vertices):
@@ -154,8 +131,8 @@ def warp_image(img, inverse= False):
         [695, 455]
     ])
 
-    dst = np.float32([[320, 685],
-        [950, 685],
+    dst = np.float32([[320, 680],
+        [950, 680],
         [320, 0],
         [950, 0]
     ])
@@ -182,11 +159,13 @@ def set_histogram(binary_warped):
     midpoint = np.int(histogram.shape[0] / 2)
     g_line.leftx_base = np.argmax(histogram[:midpoint])
     g_line.rightx_base = np.argmax(histogram[midpoint:]) + midpoint
-    print ("Histogram peak set")
-    print((g_line.leftx_base, g_line.rightx_base))
+    #print ("Histogram peak set")
+    #print((g_line.leftx_base, g_line.rightx_base))
 
 def find_lane_lines(binary_warped):
     global g_line
+
+    set_histogram(binary_warped)
     # Choose the number of sliding windows
     nwindows = 9
     # Set height of windows
@@ -253,16 +232,17 @@ def find_lane_lines(binary_warped):
     return (left_fitx, right_fitx, ploty)
 
 def find_lane_lines_efficient(binary_warped):
+    global g_line
 
     nonzero = binary_warped.nonzero()
     nonzeroy = np.array(nonzero[0])
     nonzerox = np.array(nonzero[1])
     margin = 100
-    left_lane_inds = ((nonzerox > (line.left_fit[0] * (nonzeroy ** 2) + line.left_fit[1] * nonzeroy + line.left_fit[2] - margin)) & (
-    nonzerox < (line.left_fit[0] * (nonzeroy ** 2) + line.left_fit[1] * nonzeroy + line.left_fit[2] + margin)))
+    left_lane_inds = ((nonzerox > (g_line.left_fit[0] * (nonzeroy ** 2) + g_line.left_fit[1] * nonzeroy + g_line.left_fit[2] - margin)) & (
+    nonzerox < (g_line.left_fit[0] * (nonzeroy ** 2) + g_line.left_fit[1] * nonzeroy + g_line.left_fit[2] + margin)))
     right_lane_inds = (
-    (nonzerox > (line.right_fit[0] * (nonzeroy ** 2) + line.right_fit[1] * nonzeroy + line.right_fit[2] - margin)) & (
-    nonzerox < (line.right_fit[0] * (nonzeroy ** 2) + line.right_fit[1] * nonzeroy + line.right_fit[2] + margin)))
+    (nonzerox > (g_line.right_fit[0] * (nonzeroy ** 2) + g_line.right_fit[1] * nonzeroy + g_line.right_fit[2] - margin)) & (
+    nonzerox < (g_line.right_fit[0] * (nonzeroy ** 2) + g_line.right_fit[1] * nonzeroy + g_line.right_fit[2] + margin)))
 
     # Again, extract left and right line pixel positions
     leftx = nonzerox[left_lane_inds]
@@ -274,18 +254,18 @@ def find_lane_lines_efficient(binary_warped):
     right_fit = np.polyfit(righty, rightx, 2)
 
     # Calculate line width
-    left_intercept = line.left_fit[0] * binary_warped.shape[0] ** 2 + line.left_fit[1] * binary_warped.shape[0] + line.left_fit[2]
-    right_intercept = line.right_fit[0] * binary_warped.shape[0] ** 2 + line.right_fit[1] * binary_warped.shape[0] + line.right_fit[2]
+    left_intercept = g_line.left_fit[0] * binary_warped.shape[0] ** 2 + g_line.left_fit[1] * binary_warped.shape[0] + g_line.left_fit[2]
+    right_intercept = g_line.right_fit[0] * binary_warped.shape[0] ** 2 + g_line.right_fit[1] * binary_warped.shape[0] + g_line.right_fit[2]
     width_pixels = right_intercept - left_intercept
 
     if width_pixels < 400:
-        line.detected = False
+        g_line.detected = False
         print("Lines are too close. Resetting ...")
         print(width_pixels)
         return find_lane_lines(binary_warped)
     else:
-        line.left_fit = left_fit
-        line.right_fit = right_fit
+        g_line.left_fit = left_fit
+        g_line.right_fit = right_fit
 
     # Generate x and y values for plotting
     ploty = np.linspace(0, binary_warped.shape[0] - 1, binary_warped.shape[0])
@@ -295,11 +275,12 @@ def find_lane_lines_efficient(binary_warped):
     return (left_fitx, right_fitx, ploty)
 
 def calculate_vehicle_position(binary_warped):
+    global  g_line
     xm_per_pix = 3.7 / 650
-    left_line_x = line.left_fit[0] * binary_warped.shape[0] ** 2 + line.left_fit[1] * binary_warped.shape[0] + \
-                     line.left_fit[2]
-    right_line_x = line.right_fit[0] * binary_warped.shape[0] ** 2 + line.right_fit[1] * binary_warped.shape[0] + \
-                      line.right_fit[2]
+    left_line_x = g_line.left_fit[0] * binary_warped.shape[0] ** 2 + g_line.left_fit[1] * binary_warped.shape[0] + \
+                     g_line.left_fit[2]
+    right_line_x = g_line.right_fit[0] * binary_warped.shape[0] ** 2 + g_line.right_fit[1] * binary_warped.shape[0] + \
+                      g_line.right_fit[2]
 
     vehicle_deviation = ((left_line_x + right_line_x) / 2.0) - (binary_warped.shape[1] / 2.0)
     return vehicle_deviation * xm_per_pix
@@ -322,7 +303,9 @@ def calculate_radius(binary_warped, left_fitx, right_fitx):
     return (left_curverad, right_curverad   )
 
 def process_image(img):
-    line.frameCounter += 1
+    global g_line
+
+    g_line.frameCounter += 1
     undist_img = cal_undistort(img, mtx, dist)
     binary_img = color_gradient_binary(undist_img)
     imgWidth = binary_img.shape[1]
@@ -337,25 +320,25 @@ def process_image(img):
 
     warped_img = warp_image(binary_masked_img)
 
-    if line.detected:
+    if g_line.detected:
         left_fitx, right_fitx, ploty = find_lane_lines_efficient(warped_img)
     else:
         left_fitx, right_fitx, ploty = find_lane_lines(warped_img)
 
     # Line information
-    line.left_nfitx[line.currentIteration] = left_fitx
-    line.right_nfitx[line.currentIteration] = right_fitx
+    g_line.left_nfitx[g_line.currentIteration] = left_fitx
+    g_line.right_nfitx[g_line.currentIteration] = right_fitx
 
-    line.currentIteration += 1
-    line.currentIteration %= line.MAX_ITERATION_SIZE
+    g_line.currentIteration += 1
+    g_line.currentIteration %= g_line.MAX_ITERATION_SIZE
 
     left_fitx_average = left_fitx
     right_fitx_average = right_fitx
 
     # Average the lines
-    if (line.frameCounter > line.MAX_ITERATION_SIZE):
-        left_fitx_average = np.average(line.left_nfitx, axis = 0)
-        right_fitx_average = np.average(line.right_nfitx, axis = 0)
+    if (g_line.frameCounter > g_line.MAX_ITERATION_SIZE):
+        left_fitx_average = np.average(g_line.left_nfitx, axis = 0)
+        right_fitx_average = np.average(g_line.right_nfitx, axis = 0)
 
 
 
@@ -373,10 +356,14 @@ def process_image(img):
     vehicle_deviation = calculate_vehicle_position(warped_img)
     left_curvature, right_curvature  = calculate_radius(warped_img, left_fitx_average, right_fitx_average)
 
-    cv2.putText(unwarped_result, 'Vehicle Lane Deviation in m: {:05}'.format(vehicle_deviation), (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 2, (200,255,155), 2, cv2.LINE_AA)
+    cv2.putText(unwarped_result, 'Vehicle Lane Deviation in m: {:06.3f}'.format(vehicle_deviation), (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (200,255,155), 2, cv2.LINE_8)
 
-    cv2.putText(unwarped_result, 'Curvature in m: Left {:05}  Right {:05}'.format(left_curvature, right_curvature), (50, 100),
-                cv2.FONT_HERSHEY_SIMPLEX, 2, (200, 255, 155), 2, cv2.LINE_AA)
+    cv2.putText(unwarped_result, 'Curvature in m: Left {:06.2f}'.format(left_curvature), (50, 100),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 255, 155), 2, cv2.LINE_8)
+
+    cv2.putText(unwarped_result,
+                'Right {:06.2f}'.format(right_curvature), (50, 150),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 255, 155), 2, cv2.LINE_8)
 
     return unwarped_result
 
@@ -411,7 +398,6 @@ def test_images():
         warped_img = warp_image(binary_masked_img)
         save_result(img, warped_img, fname, "warped/")
 
-        set_histogram(warped_img)
         left_fitx, right_fitx, ploty = find_lane_lines(warped_img)
 
         left_line = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
@@ -436,8 +422,8 @@ g_line = Line()
 test_images()
 
 #Test on video
-'''
-project_output = 'project_video_output.mp4'
-clip1 = VideoFileClip("project_video.mp4")
+g_line = Line()
+project_output = '../project_video_output.mp4'
+clip1 = VideoFileClip("../project_video.mp4")
 out_clip = clip1.fl_image(process_image) #NOTE: this function expects color images!!
-out_clip.write_videofile(project_output, audio=False)'''
+out_clip.write_videofile(project_output, audio=False)
